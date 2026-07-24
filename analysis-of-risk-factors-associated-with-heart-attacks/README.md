@@ -10,7 +10,7 @@ Explore the relationships between demographic and clinical variables and the occ
 
 ## Data Source
 
-**Heart Attack Risk Factors dataset** from [Kaggle](https://www.kaggle.com/), covering Indonesia. 158'355 observations and 28 variables spanning demographic factors (age, gender, region, income), lifestyle behaviors (smoking, alcohol, physical activity, diet, sleep), environmental factors (air pollution, stress), and clinical measurements (blood pressure, cholesterol, blood sugar, triglycerides, EKG results). After cleaning, a random sample of 10'000 observations was used for analysis.
+**Heart Attack Risk Factors dataset** from Kaggle, covering Indonesia. 158'355 observations and 28 variables spanning demographic factors (age, gender, region, income), lifestyle behaviors (smoking, alcohol, physical activity, diet, sleep), environmental factors (air pollution, stress), and clinical measurements (blood pressure, cholesterol, blood sugar, triglycerides, EKG results). After cleaning, a random sample of 10'000 observations was used for analysis.
 
 ## Approach
 
