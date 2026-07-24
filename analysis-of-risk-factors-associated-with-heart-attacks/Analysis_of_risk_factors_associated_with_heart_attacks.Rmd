@@ -1,0 +1,799 @@
+---
+title: "Analysis of Risk Factors Associated with Heart Attacks in Indonesia"
+subtitle: "Evidence from Clinical and Demographic Data"
+author: "Samuel Amuzu, Nick Schaufelberger, Julian Purtschert"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: '4'
+    number_sections: true
+  html_document:
+    toc: true
+    toc_depth: 4
+    number_sections: true
+    code_folding: hide
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introduction
+
+## Research question and objective
+
+Heart attacks are a major global health concern and one of the leading causes of mortality worldwide. Understanding the factors associated with heart attack occurrence is therefore essential for prevention, early detection, and informed clinical decision-making.
+
+The objective of this analysis is to explore the relationships between selected demographic and clinical variables and the occurrence of a heart attack. Using exploratory data analysis, we examine patterns, distributions, and associations within the data, and apply statistical and machine learning models to assess predictive performance.
+
+## Libraries used
+
+The following libraries have been used for the report:
+
+```{r libraries_reading_data}
+# Load Libraries
+library(readr)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(ggforce)
+library(plotly)
+library(car)
+library(mgcv)
+library(corrplot)
+library(ggfortify)
+library(caret)
+library(e1071)
+library(pROC)
+library(neuralnet)
+
+# Reading data
+d.heart.attack <- read.csv("data/heart_attack_indonesia.csv")
+
+```
+
+
+## Information about the Dataset
+
+We decided to look into a publicly available heart attack dataset from Indonesia [**dataset**](https://www.kaggle.com/datasets/ankushpanday2/heart-attack-prediction-in-indonesia) sourced from Kaggle. This dataset offers a comprehensive health profile of individuals in Indonesia with a focus on heart attack prediction. It comprises key demographic, clinical, lifestyle, and environmental variables that are strongly associated with cardiovascular risk. The data reflect real-world health conditions in Indonesia by incorporating critical factors such as hypertension, diabetes, obesity, smoking behavior, and exposure to air pollution.
+
+
+------------------------------------------------------------------------
+
+
+# Data
+
+## Data Exploration
+
+We explored the raw data to understand the structure and quality of it. We inspected the first few rows and examined variable types by looking at the structure. We also examined the summary statistics for all variables.
+
+```{r, results='hide'}
+head(d.heart.attack)
+```
+
+
+```{r, results='hide'}
+# Explore the data
+str(d.heart.attack)
+colnames(d.heart.attack)
+```
+
+```{r data_exploration, results='hide'}
+# Summary Statistics 
+summary(d.heart.attack)
+```
+
+
+From the structure of the dataset, we can see that it contains 158'355 observations and 28 variables, indicating a very large and information rich set. The variables span a broad range of domains, including demographic factors (age, gender, region, income level), lifestyle behaviors (smoking, alcohol consumption, physical activity, diet, sleep), environmental factors (air pollution, stress), and detailed clinical measurements (blood pressure, cholesterol levels, blood sugar, triglycerides, EKG results). Many key medical risk factors such as hypertension, diabetes, obesity, and family history are encoded as binary variables. The target variable, "heart_attack", is also binary.
+
+## Adding a count variable
+
+To meet all requirements of the dataset, a count variable was introduced by calculating the number of potential pre-existing risk factors reported for each individual and appending it to the existing dataset.
+
+```{r}
+risk_factor_cols <- c(
+  "hypertension",
+  "diabetes",
+  "obesity",
+  "previous_heart_disease",
+  "family_history",
+  "medication_usage"
+)
+
+d.heart.attack$risk_factor_count <-
+  rowSums(d.heart.attack[risk_factor_cols] == "1", na.rm = TRUE)
+```
+
+## Further Data Cleaning and Preparation 
+
+To continue, we checked for any missing values and duplicates in the dataset.
+
+```{r data_cleaning_and_preparation, results='hide'}
+# Check for missing values in the data
+colSums(is.na(d.heart.attack))
+
+# Check for duplicates 
+sum(duplicated(d.heart.attack))
+```
+
+
+As seen in the output, there are no missing, nor duplicate values.
+
+## Data Conversion
+
+Several variables in the dataset encode binary categorical information using numeric values (0 and 1). When imported into R, these variables were initially treated as integers. As they represent categorical states rather than continuous values, they were converted into factor variables with labels “No” (0) and “Yes” (1), ensuring that statistical models handle them appropriately as categorical predictors. The factor levels were subsequently checked to confirm consistent coding.
+
+In addition, categorical variables imported as character data types were also converted into factors to ensure uniform treatment of categorical information across the dataset.
+```{r data_conversion, results='hide'}
+# Convert data from integer to categorical 
+d.heart.attack <- d.heart.attack %>%
+  mutate(across(c(hypertension, family_history, diabetes, obesity, 
+                  previous_heart_disease, medication_usage,
+                  participated_in_free_screening, heart_attack), 
+                ~factor(.x, levels = c(0,1), labels = c("No", "Yes"))))
+
+# Convert data to categorical data from character 
+d.heart.attack <- d.heart.attack %>%
+    mutate(across(c(income_level, physical_activity, stress_level,
+                    air_pollution_exposure, alcohol_consumption,
+                    gender, region, smoking_status, dietary_habits,
+                    EKG_results),
+                  as.factor))
+
+# Identifying the levels for each factor column 
+lapply(d.heart.attack[, sapply(d.heart.attack, is.factor)], levels)
+```
+
+## Data Sampling
+
+Before sampling, we examined the distribution of the target variable heart_attack to assess whether class imbalance was present. The dataset originally contained 94'854 observations in the “No” group and 63'501 in the “Yes” group as seen below.
+
+```{r data_sampling}
+# Identifying proportion of each class (0, 1) for heart attack in the data
+table(d.heart.attack$heart_attack)
+prop.table(table(d.heart.attack$heart_attack))
+```
+
+Although the classes are not perfectly balanced, the minority class (“Yes”) represents approximately 40% of the data, which is sufficient for binary classification. As a result, resampling techniques such as oversampling or undersampling were not required.
+
+Due to the large size of the dataset, a random sample of 10,000 observations was drawn after data cleaning to create a more manageable dataset. Simple random sampling was used to preserve the overall data structure and class proportions, while potential bias towards the majority class was considered during model evaluation.
+```{r random_sampling}
+
+# Taking a random sample of 10'000 rows
+# For reproducibility
+set.seed(123)  
+d.heart.attack <- d.heart.attack %>% 
+  sample_n(10000)
+```
+
+
+```{r, results='hide'}
+# Confirm sampling process
+head(d.heart.attack, n = 10)
+str(d.heart.attack)
+```
+
+
+## Exploratory Data Visualisation
+
+To further explore the dataset, selected variables were visualised to examine relationships relevant to heart attack risk. Given the large number of variables, the analysis focuses on predictors commonly associated with cardiovascular outcomes and expected to be informative.
+
+### Relationship between Heart attack and Age
+
+The boxplot compares the distribution of age between individuals who experienced a heart attack and those who did not. Age is displayed on the y-axis and heart attack status (“Yes” or “No”) on the x-axis. For each group, the box represents the interquartile range, the horizontal line indicates the median age, and the whiskers show the data spread excluding outliers.
+
+```{r exploratory_data_visualisation}
+# Vizualisation of relationship between age and heart attack 
+plot(age ~ heart_attack, data = d.heart.attack, 
+     main = "Relationship Between Age and Heart attack")
+```
+
+The boxplot shows that individuals who experienced a heart attack tend to be older than those who did not. The median age is higher in the heart attack group, and the age distribution is generally shifted towards larger values. Although there is substantial overlap between the two groups, the difference in medians suggests a positive association between age and heart attack occurrence, supporting the role of age as a relevant risk factor.
+
+### Relationship between age and fasting blood sugar
+
+The scatter plot illustrates the relationship between age and fasting blood sugar levels. Each point represents an individual observation, with age on the x-axis and fasting blood sugar on the y-axis, and observations are colour-coded by heart attack status. A fitted linear regression line summarises the overall linear trend between age and fasting blood sugar.
+
+```{r relationship_age_fasting_blood_sugar}
+# Visualisation of the relationship between Age and Fasting blood sugar
+plot(d.heart.attack$age,
+     d.heart.attack$fasting_blood_sugar,
+     col = ifelse(d.heart.attack$heart_attack == "Yes", "red", "blue"),
+     pch = 19,
+     main = "Relationship Between Age and Fasting Blood Sugar",
+     xlab = "Age",
+     ylab = "Fasting Blood Sugar")
+# Legend
+legend("topleft",
+       legend = c("No Heart Attack", "Heart Attack"),
+       col = c("blue", "red"),
+       pch = 19)
+
+# Regression line
+abline(lm(fasting_blood_sugar ~ age, data = d.heart.attack),
+       col = "black", lwd = 2)
+```
+
+The plot suggests a weak positive association between age and fasting blood sugar, as indicated by the slightly upward-sloping regression line. However, substantial variability is observed across all age groups, and the distributions of individuals with and without a heart attack overlap considerably. This suggests that fasting blood sugar alone does not strongly distinguish heart attack outcomes in this visualization.
+
+<!--
+### Visualising to show our binary data 
+
+The scatter plot visualizes the relationship between systolic blood pressure and the binary heart attack outcome. Systolic blood pressure is shown on the x-axis, while the heart attack status (“Yes” or “No”) is displayed on the y-axis. Each point represents an individual observation, resulting in two horizontal bands corresponding to the two outcome categories. This visualization emphasizes the binary nature of the response variable while allowing a comparison of blood pressure values across outcome groups.
+-->
+
+```{r show_binary_data, include=FALSE}
+# Visualisation of Relationship between Blood pressure systolic and Heart attack
+ggplot(data = d.heart.attack,
+mapping = aes(y = heart_attack,
+x = blood_pressure_systolic)) +
+geom_point()
+```
+
+<!--
+The plot indicates that systolic blood pressure values tend to be higher among individuals who experienced a heart attack compared to those who did not. Although there is considerable overlap between the two groups, higher systolic blood pressure levels appear more frequently in the heart attack group. This pattern suggests a positive association between systolic blood pressure and heart attack occurrence. However, the overlap also indicates that systolic blood pressure alone is not sufficient to clearly separate individuals with and without a heart attack, highlighting the need for multivariable modeling.
+-->
+
+### Correlation Matrix for Numeric Predictors
+
+The correlation heatmap displays pairwise Pearson correlation coefficients among the numerical predictors in the dataset. Each cell represents the strength and direction of the linear relationship between two variables, with colour intensity indicating the magnitude of the correlation. Darker shades correspond to stronger positive or negative correlations, while lighter shades indicate weaker relationships, providing an overview of the dependency structure among the numeric predictors.
+
+```{r correlation_matrix_numeric_predictors}
+# Extracting numeric variables 
+numeric_vars <- d.heart.attack[sapply(d.heart.attack, is.numeric)]
+
+# Correlation plot for numeric variables 
+corrplot(cor(numeric_vars), method = "color")
+```
+
+The correlation matrix shows that most numerical predictors have weak to moderate correlations with one another. No strong correlations are observed, suggesting that severe multicollinearity is unlikely to pose a major issue in the regression analysis. Some moderate positive associations are present, which is expected among related physiological measures. Overall, the correlation structure supports the inclusion of multiple numerical predictors in the logistic regression model without a substantial risk of unstable coefficient estimates.
+
+<!--
+### Relationship Between fasting blood sugar and Heart attack
+
+The boxplot compares the distribution of fasting blood sugar levels between individuals who experienced a heart attack and those who did not. Fasting blood sugar is shown on the y-axis, while the binary heart attack outcome (“Yes” or “No”) is displayed on the x-axis. For each group, the box represents the interquartile range, the horizontal line indicates the median, and the whiskers capture the spread of the data excluding outliers.
+-->
+
+```{r relationship_blood_sugar_heart_attack, include=FALSE}
+# Visualisation of Fasting blood sugar against heart attack 
+plot(fasting_blood_sugar ~ heart_attack, data = d.heart.attack, 
+     main = "Fasting blood sugar against Heart attack")
+```
+
+<!--
+The boxplot shows that fasting blood sugar levels are slightly higher on average among individuals who experienced a heart attack compared to those who did not. The median fasting blood sugar is marginally higher in the heart attack group, and the upper range extends to somewhat larger values. However, there is substantial overlap between the two distributions, indicating that fasting blood sugar alone does not clearly distinguish between individuals with and without a heart attack.
+-->
+
+### Relationship Between Blood pressure systolic and Blood pressure diastolic on Individuals with and without a Heart attack
+
+The scatter plots illustrate the relationship between diastolic and systolic blood pressure. Diastolic blood pressure is shown on the x-axis and systolic blood pressure on the y-axis, with each point representing an individual observation. A fitted linear regression line summarises the overall linear association between the two measures. The plots are faceted by heart attack status, allowing comparison of this relationship between individuals who experienced a heart attack and those who did not.
+
+```{r relationship_systolic_blood_pressure}
+# Visualisation of relationship between systolic and diatolic blood pressure
+ggplot(data = d.heart.attack,
+mapping = aes(y = blood_pressure_systolic,
+x = blood_pressure_diastolic)) +
+geom_point() +
+  # Include a regression line
+geom_smooth(method = "lm") +
+  # Separate plots by heart attack
+facet_grid(.~ heart_attack)
+```
+
+
+The scatter plots indicate a positive association between systolic and diastolic blood pressure in both groups, suggesting that individuals with higher diastolic pressure also tend to have higher systolic pressure. The fitted regression lines are similar across heart attack outcomes, with no substantial differences in slope or overall pattern. This suggests that the relationship between systolic and diastolic blood pressure does not vary meaningfully by heart attack status. As a result, these measures may convey overlapping information and should be considered carefully when included together as predictors in regression models.
+
+### Relationship between cholesterol and heart attack
+
+The density plot compares the distribution of cholesterol levels between individuals who experienced a heart attack and those who did not. Cholesterol level is shown on the x-axis, with the y-axis representing the estimated probability density. Separate density curves are plotted for each outcome, allowing a smooth comparison of the central tendency and spread of cholesterol levels, while the shaded overlap highlights similarities between the two groups.
+
+
+```{r relationship_cholesterol_heart_attack}
+ggplot(d.heart.attack,
+       aes(x = cholesterol_level,
+           fill = factor(heart_attack))) +
+  geom_density(alpha = 0.4) +
+  labs(
+    fill = "Heart attack",
+    title = "Cholesterol density by heart attack outcome"
+  ) +
+  theme_minimal()
+```
+
+The density curves suggest that individuals who experienced a heart attack tend to have slightly higher cholesterol levels, as indicated by a rightward shift in the distribution. However, substantial overlap remains between the two groups, indicating that cholesterol level alone does not clearly distinguish individuals with and without a heart attack.
+
+------------------------------------------------------------------------
+
+
+# Linear Regression (LM) (Lead: Samuel Amuzu)
+
+## Linear regression model for fasting blood sugar
+
+As an exploratory step, a linear regression model was fitted with fasting blood sugar as the response to assess associations with demographic, lifestyle, and clinical predictors, rather than for prediction. Partial F-tests using the drop1() function were then applied to evaluate the contribution of individual predictors by assessing the impact of their removal on model fit. The results informed model simplification while retaining clinically relevant variables.
+
+```{r linear_regression}
+# Linear regression model 
+lm.fbs <- lm(fasting_blood_sugar ~ heart_attack + age + gender 
+                             + region + income_level + hypertension + diabetes 
+                             + cholesterol_level + obesity + waist_circumference 
+                             + family_history + smoking_status 
+                             + alcohol_consumption + physical_activity 
+                             + dietary_habits + air_pollution_exposure 
+                             + stress_level + sleep_hours 
+                             + blood_pressure_systolic + blood_pressure_diastolic 
+                             + cholesterol_hdl + cholesterol_ldl + triglycerides 
+                             + EKG_results + previous_heart_disease 
+                             + medication_usage + participated_in_free_screening,  
+                             data = d.heart.attack )
+
+# Perform F - test 
+drop1(lm.fbs, test = "F")
+```
+
+Predictors with p-values below the 0.05 significance level indicate that their removal results in a statistically significant reduction in model fit. Based on the partial F-tests, previous heart disease, physical activity, smoking status, heart attack status, and hypertension show strong evidence in contributing to explaining variation in fasting blood sugar after adjusting for other covariates in the model.
+
+Hypertension shows weaker statistical evidence, with a p-value close to the conventional 0.05 threshold. Given its established clinical relevance, it was retained in the model despite the limited statistical evidence observed in this sample.
+
+
+## Linear Regression with required predictors
+
+Based on the results of the partial F-tests, a reduced linear regression model was fitted including only predictors that showed the statistical or clinical relevance.
+
+```{r lm_with_required_predictors}
+# Updated Linear regression model with required predictors excluding intercept
+lm.fbs.reduced <- lm(
+  fasting_blood_sugar ~ heart_attack + smoking_status + physical_activity +
+    previous_heart_disease + hypertension + 0, data = d.heart.attack
+)
+
+# View result 
+summary(lm.fbs.reduced)
+```
+
+
+Because the model was fitted without an intercept, the regression coefficients represent group-specific mean fasting blood sugar levels. The reduced linear regression model explains a large proportion of the variability in fasting blood sugar (R² = 0.94), indicating a strong overall fit.
+
+The results provide strong evidence that individuals who experienced a heart attack have higher average fasting blood sugar levels (111.9) compared to those who did not (106.9). There is also strong evidence that individuals who have never smoked exhibit higher average fasting blood sugar levels compared to former smokers, while no evidence is found for an association between past smoking and fasting blood sugar. Similarly, no evidence is observed for an association between either moderate or low physical activity levels and fasting blood sugar.
+
+In addition, previous heart disease is significantly associated with lower fasting blood sugar levels, with an estimated decrease of 2.64 units on average. In contrast, hypertension does not show evidence of an association with fasting blood sugar in this model.
+
+
+## Visualising Model fit
+```{r linear_regression_model_fit}
+par(mfrow = c(2, 2))
+plot(lm.fbs.reduced)
+par(mfrow = c(1, 1))
+```
+
+The residuals versus fitted values plot shows no strong systematic pattern, suggesting that the linearity assumption is reasonably satisfied. The scale–location plot indicates a slight increase in residual variance at higher fitted values, suggesting mild heteroscedasticity.
+
+The Q–Q plot reveals deviations from normality in the tails of the residual distribution, indicating that the normality assumption is not fully met. However, given the large sample size, these deviations are unlikely to materially affect inference. The residuals versus leverage plot does not indicate the presence of highly influential observations, suggesting that the model fit is not unduly influenced by extreme data points.
+
+
+------------------------------------------------------------------------
+
+
+# Logistic Regression Modelling (GLM Binomial) 
+
+Following exploratory analysis, a logistic regression model was fitted to examine factors associated with heart attack occurrence. As heart_attack is a binary outcome, logistic regression appropriately models the relationship between predictors and the log-odds of a heart attack.
+
+The model allows each predictor’s association with heart attack risk to be assessed while controlling for others. The variable risk_factor_count was excluded, as it is not a direct clinical risk factor and could complicate interpretation.
+
+```{r glm_binomial}
+glm.heart.attack <- glm(heart_attack ~ . - risk_factor_count,  
+                      data = d.heart.attack,
+                      family = "binomial")
+
+summary(glm.heart.attack)
+```
+
+The logistic regression results indicate that there is a strong evidence that several predictors are  associated with heart attack occurrence after adjustment for other variables. Age, hypertension, diabetes, cholesterol level, obesity, fasting blood sugar, previous heart disease, and smoking status show statistically significant associations with heart attack risk.
+
+Specifically, increasing age, hypertension, diabetes, higher cholesterol levels, obesity, elevated fasting blood sugar, and a history of previous heart disease are associated with higher odds of experiencing a heart attack. Smoking status is also strongly associated with risk, with never-smokers and former smokers exhibiting substantially lower odds compared to current smokers.
+
+In contrast, many demographic, lifestyle, and environmental variables do not show statistically significant associations in the fully adjusted model
+
+
+## Checking collinearity issues
+
+Variance inflation factors (VIFs) were used to assess multicollinearity in the logistic regression model. All VIF values were close to 1 and well below the threshold of 10, indicating no problematic multicollinearity, and all predictors were therefore retained.
+
+```{r glm_binomial_collinearity, include=FALSE}
+# Checking for collinearity
+vif(glm.heart.attack)
+```
+
+
+## Identifying necessary variables for the model
+
+```{r glm_binomial_chisq, include=FALSE}
+
+#applying drop1()-function
+drop1(glm.heart.attack, test = "Chisq")
+
+```
+
+Likelihood ratio tests were conducted using the drop1() function with a Chi-squared test to assess the contribution of individual predictors in the logistic regression model. Based on these results, age, hypertension, diabetes, cholesterol level, obesity, smoking status, dietary habits, fasting blood sugar, and previous heart disease were retained for further analysis.
+
+## Model with required predictors
+
+After identifying the required predictors, the logistic regression model is fitted again.
+
+```{r glm_binomial_required_predictors}
+#fitting logistic regression model with required predictors
+glm.heart.attack.reduced <- glm(heart_attack ~ age + hypertension + diabetes +
+                                  cholesterol_level + obesity + smoking_status +
+                                  fasting_blood_sugar + previous_heart_disease +
+                                  dietary_habits, 
+                                data = d.heart.attack, family = "binomial")
+
+summary(glm.heart.attack.reduced)
+```
+
+After refitting the logistic regression model, several predictors show a strong evidence of association with heart attack occurrence. Age shows a positive association with heart attack risk, with higher age corresponding to increased odds. Hypertension, diabetes, obesity, elevated cholesterol levels, higher fasting blood sugar, and a history of previous heart disease are all associated with substantially increased odds of experiencing a heart attack.
+
+There is also strong evidence that Smoking status is also strongly associated with heart attack risk. Relative to current smokers, individuals who have never smoked or who are former smokers exhibit significantly lower odds of a heart attack. Unhealthy dietary habits show weak evidence but statistically significant association with heart attack occurrence.
+
+## Interpreting coefficients by applying the exponential function
+
+This exponentiated transformation expresses effects in terms of odds ratios, which quantify how the odds of experiencing a heart attack change with a one-unit increase in a predictor or relative to a reference category.
+
+```{r glm_binomial_exponentiating_coefficients}
+# Exponentiation coefficients rounding to 2 decimal places
+exp(coef(glm.heart.attack.reduced)) %>% round(digits = 2)
+```
+Holding all other variables constant, age is associated with a modest increase in heart attack risk, with each additional year corresponding to an approximate 3% increase in the odds of experiencing a heart attack. Hypertension and diabetes emerge as strong risk factors, increasing the odds by factors of approximately 4.7 and 3.5, respectively.
+
+Higher cholesterol levels and fasting blood sugar are associated with small but positive increases in heart attack odds per unit increase. Obesity is associated with a substantial elevation in risk, with obese individuals having approximately 2.7 times higher odds of experiencing a heart attack. A history of previous heart disease shows the strongest association, increasing the odds by a factor of about 5.4.
+
+
+## Comparison between observed and fitted Values to Identify accuracy
+
+To evaluate the performance of the logistic regression model, predicted heart attack outcomes were compared with the observed values. Model performance was summarized using a confusion matrix, which reports correct and incorrect classifications, and overall accuracy was computed as a measure of predictive performance.
+
+```{r, results='hide'}
+# Round fitted values for the logistic regression to 2 decimal places
+fitted(glm.heart.attack) %>% round(digits = 2)
+```
+
+
+```{r glm_binomial_observed_fitted_values}
+# Conditional statement for fitted values less than 0.5 to 0 else 1 (binary)
+fitted.glm.heart.data <- ifelse(fitted(glm.heart.attack) < 0.5, 
+                                "No", "Yes") %>%
+  factor(levels = c("No", "Yes"))
+
+# Compare Between Observed and Fitted Values to identify models accuracy 
+# Confusion Matrix 
+cm <- table(obs = d.heart.attack$heart_attack, 
+      fit = fitted.glm.heart.data) %>% 
+  prop.table() %>% 
+  round(digits = 2)
+
+cm
+
+```
+
+
+The confusion matrix shows that 50% of observations were correctly classified as not having a heart attack, while 23% were correctly classified as having a heart attack. Misclassifications occur in 10% of cases where a heart attack was predicted but did not occur (false positives) and in 17% of cases where a heart attack occurred but was not predicted (false negatives). Overall, the model correctly classifies 73% of observations, indicating moderate predictive performance.
+
+## Sensitivity (True Positive Rate)
+
+In addition to overall accuracy, model performance was evaluated using sensitivity (true positive rate), which measures the proportion of actual heart attack cases that are correctly identified. This metric is particularly important in a medical setting because false negatives may delay diagnosis and treatment.
+
+
+```{r glm_binomial_tpr}
+TPR  <- cm["Yes", "Yes"] / sum(cm["Yes", ])
+TPR
+```
+
+
+The model achieves a sensitivity of 0.575, meaning it correctly detects 57.5% of individuals who experienced a heart attack. This indicates that a substantial share of true cases is missed, which limits the model’s usefulness for screening.
+
+
+------------------------------------------------------------------------
+
+
+# Generalised Additive Model (GAM)
+
+After fitting the reduced logistic regression model, a generalized additive model (GAM) was used to capture potential non-linear effects of continuous predictors on heart attack risk. Continuous variables were modeled using smooth functions, while categorical predictors remained linear. A quasibinomial family was applied to account for potential overdispersion.
+
+```{r generalised_additive_model}
+# Generalised Additive Models for Binary Overdispersion
+gam.heart.attack <- gam(heart_attack ~ s(age) + hypertension + diabetes +
+                                  cholesterol_level + obesity + smoking_status +
+                                  s(fasting_blood_sugar) + previous_heart_disease, 
+                                data = d.heart.attack, 
+                        family = "quasibinomial")
+
+summary(gam.heart.attack)
+    
+```
+
+The generalized additive model (GAM) reveals significant non-linear effects of age and fasting blood sugar on heart attack risk, as indicated by the smooth terms with high effective degrees of freedom and highly significant p-values. This suggests that the relationships between these variables and the probability of a heart attack are not adequately captured by a linear specification.
+
+The parametric terms are broadly consistent with the logistic regression results, with hypertension, diabetes, obesity, smoking status, and previous heart disease showing strong associations with increased heart attack risk. The model explains approximately 22.8% of the deviance, indicating a moderate improvement in flexibility while retaining interpretability.
+
+
+## Non-Linear predictors
+
+To investigate whether non-linear patterns exist, we fitted a generalized additive model (GAM) and visualized the smooth effects of the continuous predictors. This allows us to see how heart-attack risk changes across the full range of a variable without forcing a straight-line relationship.
+
+
+```{r gam_non_linear_predictors}
+plot(gam.heart.attack, pages = 1, shade = TRUE)
+```
+
+The left panel shows a non-linear effect of age on heart attack risk, with little change at younger ages and a progressively steeper increase at older ages. The right panel shows that fasting blood sugar has minimal effect at lower levels, but beyond a higher threshold the risk rises sharply, indicating a threshold-type relationship.
+
+
+------------------------------------------------------------------------
+
+
+# Generalized Linear Model (GLM)
+
+## Poisson Regression for Count Data
+
+In addition to binary outcomes, the analysis includes a count response variable, risk_factor_count, representing the number of risk factors per individual. Poisson regression was used as an initial modelling approach for this non-negative count data. Prior to model fitting, the response variable was converted to integer format to ensure compatibility with the Poisson framework.
+
+```{r gam_modelling_data}
+# Converting risk factor count from numeric to integer data type
+d.heart.attack$risk_factor_count <- as.integer(d.heart.attack$risk_factor_count)
+
+str(d.heart.attack$risk_factor_count)
+```
+
+As the output shows, each risk factor count has now been converted to an integer.
+
+## Fitting the Poisson Model
+
+To model the count outcome risk factor count, a Poisson generalized linear model was fitted.
+
+```{r glm_poisson}
+# Poisson Model 
+glm.risk_factor_count <- glm(risk_factor_count ~ ., 
+                           data = d.heart.attack, family = "poisson")
+
+summary(glm.risk_factor_count)
+```
+
+The Poisson model shows strong positive associations between the risk factor count and variables such as hypertension, diabetes, obesity, family history, previous heart disease, and medication use, while most other predictors are not significant. However, these results are likely biased because all of them are directly included in, or closely related to, how the risk factor count is constructed, which may inflate their apparent effects.
+
+------------------------------------------------------------------------
+
+# Support Vector Machine (SVM) (Lead: Nick Schaufelberger)
+
+We next proceeded to the predictive modelling stage. The data were split using a stratified 80/20 training–testing split to preserve class proportions. Support Vector Machine (SVM) models with linear and radial kernels were initially fitted using default hyperparameters, but both achieved similar predictive accuracy. Hyperparameter tuning of the cost parameter was therefore performed to assess whether a narrower decision boundary would improve performance; however, no improvement was observed. The results presented below correspond to the best-performing model, using the response variable and predictors selected based on the drop1() results from the logistic and linear regression analyses.
+
+## Prepare Data for Training
+
+To evaluate predictive performance, the dataset was split into training (80%) and testing (20%) sets using a stratified split to preserve the class distribution of the outcome variable.
+
+```{r svm_data_preparation}
+set.seed(123)
+
+# Create Training data & Testing data 
+train_data <- createDataPartition(y = d.heart.attack$heart_attack,
+                                  p = 0.8, 
+                                  list = FALSE)
+
+# For the training data 
+train  <- d.heart.attack[train_data, ]
+
+# For the testing data 
+test <- d.heart.attack[-train_data, ]
+
+# actual results of test data 
+test_truth <- test %>%
+  pull(heart_attack)
+
+```
+
+## Train the Support Vector Machine
+
+A Support Vector Machine (SVM) with a linear kernel was trained using predictors identified in the earlier regression analyses. The linear kernel was selected to assess whether a linear decision boundary is sufficient to distinguish heart attack cases from non-cases.
+
+```{r svm_train}
+set.seed(123)
+svm_model <- svm(
+  heart_attack ~ hypertension + diabetes + obesity + cholesterol_level +
+    smoking_status + previous_heart_disease + dietary_habits + age +
+    fasting_blood_sugar,
+  data        = train,
+  kernel      = "linear",
+  probability = TRUE,
+  cost = 1
+)
+
+summary(svm_model)
+```
+
+The model identified approximately 4'900 support vectors, indicating that a substantial subset of observations lies close to the decision boundary and contributes to classification. As expected for SVMs, model interpretation focuses on predictive performance rather than individual parameter estimates.
+
+
+## Model Predictions
+
+We used the trained SVM model to predict heart attack outcomes for the test dataset and summarized the predicted class labels.
+
+```{r svm_model_predictions}
+test_pred <- predict(svm_model, test)
+table(test_pred)
+```
+
+The model predicts 1'344 individuals as No heart attack and 655 individuals as Heart attack. To assess how accurate these predictions are, we next compare them to the true outcomes using a confusion matrix.
+
+## Evaluate results
+
+```{r svm_evaluation}
+conf_matrix <- confusionMatrix(test_pred, test_truth)
+conf_matrix
+```
+
+The SVM model predicts whether an individual will experience a heart attack or not and achieves an overall accuracy of 72%. However, since the positive class was defined as “No heart attack”, the reported sensitivity of 82% reflects the model’s ability to correctly identify individuals without a heart attack, while a substantial number of true heart attack cases remain misclassified.
+
+## Extracting predicted probabilities
+
+In addition to class predictions, we extracted predicted probabilities from the SVM model to quantify the model’s confidence that an individual belongs to the heart attack class.
+
+```{r svm_extract_probabilities}
+# Predict with probabilities
+svm_prob <- predict(
+  svm_model,
+  test,
+  probability = TRUE
+)
+
+# Extract probability matrix
+svm_prob_mat <- attr(svm_prob, "probabilities")
+
+# Probability of the positive class ("Yes")
+svm_prob_yes <- svm_prob_mat[, "Yes"]
+
+# Correctly formed true labels
+test_truth <- factor(test_truth, levels = c("No", "Yes"))
+```
+
+## Build ROC curve and compute AUC
+
+To further evaluate the discriminative performance of the SVM model, we constructed a Receiver Operating Characteristic (ROC) curve using the predicted probabilities for heart attack occurrence.
+
+```{r svm_roc_curve}
+svm_roc <- roc(
+  response  = test_truth,
+  predictor = svm_prob_yes,
+  levels    = c("No", "Yes"),
+  direction = "<"
+)
+
+# AUC value
+auc(svm_roc)
+```
+
+The Area Under the Curve (AUC) is 0.794, indicating good overall discriminative ability. This means that, in approximately 79% of cases, the model 
+assigns a higher predicted probability to an individual who experienced a heart attack than to one who did not.
+
+```{r svm_visualise_roc_curve}
+plot(
+  svm_roc,
+  col = "blue",
+  lwd = 2,
+  main = "ROC Curve for Linear SVM (Heart Attack Prediction)"
+)
+
+abline(a = 0, b = 1, lty = 2, col = "gray")
+```
+
+The curve lies well above the diagonal reference line, indicating that the model performs substantially better than random classification. This visual assessment is consistent with the AUC value of 0.79 and confirms that the SVM has good discriminative ability for predicting heart attack risk.
+
+------------------------------------------------------------------------
+
+# Neural Network (Lead: Julian Purtschert)
+
+After the SVM analysis, we trained a neural network classifier to model heart attack risk. The neural network was fitted using standardized numerical predictors, while excluding risk_factor_count because it was artificially constructed for the project requirements and does not represent a clinical predictor.
+
+## Preparing Training Data
+
+```{r nn_training_data}
+# Extract train data into a new variable with only required variables 
+train_nn <- train %>% 
+  select(age, cholesterol_level, sleep_hours, waist_circumference ,
+            blood_pressure_systolic, blood_pressure_diastolic,
+            cholesterol_hdl, cholesterol_ldl, fasting_blood_sugar,
+         triglycerides, heart_attack)
+
+# Convert categorical Yes/No heart attack values to 1, 0
+train_nn$heart_attack <- ifelse(train_nn$heart_attack == "Yes", 1, 0)
+
+# Selecting Numeric Predictors
+x_vars <- c("age","cholesterol_level","sleep_hours","waist_circumference",
+            "blood_pressure_systolic","blood_pressure_diastolic",
+            "cholesterol_hdl","cholesterol_ldl","fasting_blood_sugar"
+            ,"triglycerides")
+
+# Scale training predictors and SAVE center/scale
+train_scaled <- scale(train_nn[x_vars])
+
+train_center <- attr(train_scaled, "scaled:center")
+train_scale  <- attr(train_scaled, "scaled:scale")
+
+train_nn[x_vars] <- train_scaled
+
+```
+
+## Building the Neural Network model 
+
+A feed-forward neural network was trained on standardized numerical predictors to classify heart attack outcomes, using one hidden layer with three neurons.
+
+```{r nn_building_model}
+# Building Neural Network Model 
+set.seed(123)
+nn_model <- neuralnet(
+  heart_attack ~ age + cholesterol_level + sleep_hours + waist_circumference +
+    blood_pressure_systolic + blood_pressure_diastolic + cholesterol_hdl +
+    cholesterol_ldl + fasting_blood_sugar + triglycerides,
+  data = train_nn,
+  hidden = 3,
+  linear.output = FALSE,
+  stepmax = 1e6
+)
+```
+
+## Preparing Test data
+
+```{r nn_preparing_test_data}
+# Select required predictors from test data
+test_nn <- test %>%
+  select(age, cholesterol_level, sleep_hours, waist_circumference,
+         blood_pressure_systolic, blood_pressure_diastolic,
+         cholesterol_hdl, cholesterol_ldl, fasting_blood_sugar,
+         triglycerides, heart_attack)
+
+test_truth <- factor(test_nn$heart_attack, levels = c("No","Yes"))
+
+# Convert to 0/1 for consistency
+test_nn$heart_attack <- ifelse(test_nn$heart_attack == "Yes", 1, 0)
+
+# Enforce same column order
+test_nn <- test_nn[, c(x_vars, "heart_attack")]
+
+# Apply training scaling
+test_nn[x_vars] <- scale(test_nn[x_vars], center = train_center, 
+                         scale = train_scale)
+```
+
+## Make Predictions
+
+```{r nn_predictions}
+nn_out  <- compute(nn_model, test_nn[x_vars])
+nn_prob <- nn_out$net.result[, 1]
+
+nn_class <- factor(ifelse(nn_prob > 0.5, "Yes", "No"),
+                   levels = c("No","Yes"))
+
+# Confusion Matrix 
+confusionMatrix(nn_class, test_truth, positive = "Yes")
+```
+
+The neural network achieves an overall accuracy of 60.2%, which is equal to the no-information rate, indicating that the model does not perform better than a naive classifier that always predicts the majority class. This is further reflected by a very low Kappa (0.09), suggesting only weak agreement beyond chance.
+
+Most importantly, the model shows poor sensitivity (0.24), meaning it correctly identifies only 24% of individuals who experienced a heart attack. As a result, a large number of true heart attack cases are misclassified as non-events (false negatives). While specificity is relatively high (0.84), indicating good performance in identifying individuals without a heart attack, this comes at the cost of missing many positive cases.
+
+In a medical context, this imbalance is problematic, as failing to detect true heart attack cases may have serious consequences. Overall, the neural network performs worse than the logistic regression and SVM models and is not suitable for reliable heart attack detection in its current form.
+
+------------------------------------------------------------------------
+
+# Conclusion
+
+Overall, the regression-based models offered strong interpretability and identified clinically relevant risk factors, with the GAM capturing important non-linear effects of age and fasting blood sugar. However, these models showed limited sensitivity and failed to detect many true heart attack cases. The SVM achieved the best overall predictive performance, though its effectiveness depended on the chosen classification threshold. In contrast, the neural network performed poorly and did not reliably identify heart attack cases.
+
+Future work should prioritise improving sensitivity, for example by adjusting classification thresholds or applying cost-sensitive learning. Additional improvements may include feature engineering based on clinically meaningful ranges and the use of longitudinal data. More complex models should only be considered if richer data are available, as simpler and more interpretable models performed best in this analysis.
+
+------------------------------------------------------------------------
+
+# Comment on the use of AI
+
+In this project, generative AI was used as a support tool during the preparation of the group work. It assisted with clarifying code-related questions, suggesting R functions and modelling approaches, explaining machine learning concepts, and helping draft and refine sections of the written report. While this support facilitated faster understanding and initial drafting, the generated content was not always fully accurate or context-specific, particularly for result interpretation. Consequently, all code and explanations were critically reviewed, verified against course materials, and validated using our own analyses. Overall, generative AI served as a helpful aid but not a substitute for independent understanding and critical reasoning.
+
