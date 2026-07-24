@@ -1,6 +1,6 @@
 # Customer Behavioral Insights in Banking Data
 
-Group project (team of 2) completed for the **Customer Data Analytics** course.
+Group project completed for the **Customer Data Analytics** course.
 
 ## Objective
 
