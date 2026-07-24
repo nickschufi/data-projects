@@ -1,0 +1,1117 @@
+---
+title: "COVID-19 Worldwide: Trends, Demographics, and Economic Context"
+author: "Samuel Amuzu and Nick Schaufelberger"
+date: "2025-09-18"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    code_folding: hide
+    theme: cosmo
+  pdf_document:
+    toc: true
+    toc_depth: '4'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+## Introduction and motivation
+
+We decided to look into a publicly available COVID-19 [**dataset**](https://www.kaggle.com/datasets/assemelqirsh/covid19-dataset/data) sourced from Kaggle. It contains daily records of confirmed cases, deaths, and other related variables across multiple countries and regions. We will be analyzing the worldwide impact of COVID-19 by merging pandemic case data with demographic and economic indicators in a later stage of the report, sourced [**here**](https://www.kaggle.com/datasets/tanishksharma9905/global-economic-indicators-20102025) from the World Bank Open Data. We explore how population size and GDP per capita influence the spread and severity of COVID-19 and visualize temporal and geographic trends.
+
+The choice of datasets was motivated by the authors’ backgrounds: one of us worked in a COVID-19 laboratory and was curious to investigate the pandemic’s global health impact, while the other has an economics 
+background and was more interested in its economic consequences. Merging these datasets allowed us to explore both dimensions together, enabling a richer understanding of how health and economic factors interacted or were affected during the pandemic years (2020–2024).
+
+------------------------------------------------------------------------
+
+## Objectives and hypotheses
+
+The main objective of our analysis is to investigate how the COVID-19 pandemic evolved across different regions of the world and how everything interacted with specific socio-economic indicators. By combining epidemiological data with economic data, we aim to capture both the direct health effects and the wider economic consequences of the pandemic.
+
+Our specific objectives are to describe how COVID-19 cases, deaths, and vaccinations progressed across continents over time, to compare socio-economic trends such as unemployment and GDP development during the same period, and to explore potential relationships between the severity of the pandemic and the socio-economic resilience of continents and countries.
+
+
+**From these objectives, we formulate the following hypotheses:**
+
+>Countries with higher GDP per capita experienced lower relative case fatality rates, reflecting stronger healthcare systems
+
+>Unemployment rates increased during the pandemic, particularly in regions with stricter lockdowns
+
+>Higher vaccination rate is positively associated with economic recovery, as reflected in lower unemployment and higher GDP growth
+
+>Regional differences in pandemic waves will align with differences in socio-economic resilience
+
+
+These general hypotheses will provide the framework and guidance for our data preparation, visualization, and statistical analysis in the following sections.
+
+
+------------------------------------------------------------------------
+
+## Preparing and cleaning the COVID-19 data
+
+```{r load_packages_data}
+
+#Load Libraries 
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(readr)
+library(readxl)
+library(lubridate)
+library(reshape2)
+library(rnaturalearth)
+library(sf)
+library(tidyverse)
+library(cartogram)
+library(ggforce)
+library(countrycode)
+library(scales)
+library(plotly)
+
+```
+
+We used COVID-19 related data as our main dataset. To begin the project, we started by loading the raw COVID-19 dataset into R. Before performing any analysis it was important to explore the data by checking the first few rows, the structure of the data and the column names. This helped us understand what kind of information was included in the dataset and in what format.
+
+```{r load_covid_data, echo=TRUE, results='hide'}
+
+#Load the COVID-19 dataset
+covid_data <- read.csv(
+  "data/covid_data.csv"
+)
+
+#Exploring the data
+head(covid_data, n = 20)
+str(covid_data)
+colnames(covid_data)
+
+```
+
+Next, we focused only on the features relevant to our research question, such as *total cases*, *total deaths*, *reproduction rate*, *new cases*, and *vaccination data*, as well as socio-economic indicators like *population* and the *Human Development Index*. Reducing the number of features in this way made the dataset easier to handle and ensured that our analysis remained closely aligned with our research question.
+
+While inspecting the structure of the selected dataset, we noticed that some variables were not stored in the most suitable data types. For example, the date column was stored as plain text (character), which would have prevented us from performing time-series analysis. We therefore converted it to the Date type. Similarly, the continent and location columns were stored as characters, but since they represent categories, we converted them into factors to allow for more meaningful group comparisons.
+
+Finally, we reformatted the date into the standard format (YYYY-MM-DD) to ensure consistency and arranged the dataset so that observations for each country were ordered chronologically, making it more convenient for time-series analysis. 
+
+```{r covid_prep1, echo=TRUE, results='hide'}
+
+#Select only the variables needed for analysis 
+covid.data.selected <- covid_data %>%
+  select(
+    continent,
+    location,
+    date,
+    total_cases,
+    total_deaths,
+    reproduction_rate,
+    people_fully_vaccinated,
+    positive_rate,
+    total_tests,
+    new_cases,
+    population,
+    human_development_index
+  )
+
+#Inspect the reduced data set to confirm selection
+covid.data.selected
+str(covid.data.selected)
+
+#Convert continent and location to factors, and date to Date type
+covid.data.selected <- covid.data.selected %>%
+  mutate(across(c(continent, location), as.factor), date = as.Date(date))
+
+#Change the format of the date and order rows by location and date
+covid.data.selected <- covid.data.selected %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%
+  arrange(location, date)
+
+#Check the structure again to confirm transformation
+str(covid.data.selected)
+covid.data.selected
+
+```
+
+After, we created a new year column to extract the year from the full date column because it aligns with our research on making comparison across 2020 to 2024 and it reduces day-to-day noise which we believe is not required for continent level trends
+Before aggregating our data, we recorded the row counts and removed any duplicates that were identical across all columns and then noted how many were dropped. 
+Next, we had a look at the continent variable, which we noticed contained an empty string. These empty values indicated missing continent information. We removed these rows, as observations without continent data will not contribute meaningfully to continent-level analysis. 
+We also addressed missing values more broadly, empty rows were converted to NA values so that they can be handled consistently at later stages. Rows that were completely empty across all columns were removed since they carried no useful information and finally, infinite values were replaced with NA to avoid errors during statistical analysis and visualisation. At this point the data was cleaned and ready for further analysis. 
+
+```{r covid_prep2, echo=TRUE, results='hide'}
+
+#Converting date to year
+covid.data.selected <- covid.data.selected %>%
+  mutate(year = year(date)) %>%
+  select(-date)
+
+#Count and remove duplicates across all columns
+#Count number of rows
+n_before <- nrow(covid.data.selected)
+
+#Remove only rows that are identical across all columns
+covid.data.selected <- covid.data.selected %>%
+  distinct(.keep_all = TRUE)
+
+#Count rows again after removing duplicates
+n_after <- nrow(covid.data.selected)
+
+#Print result of how much data set was cleaned
+n_removed <- n_before - n_after
+print(paste("Removed", n_removed, "exact duplicates"))
+
+dim(covid.data.selected)
+
+
+#Empty string included in the continent levels
+levels(covid.data.selected$continent)
+nlevels(covid.data.selected$continent)
+unique(covid.data.selected$continent)
+table(covid.data.selected$continent)
+
+#Observations in empty string level
+empty_string <- covid.data.selected %>%
+  filter(continent == "") %>%
+  distinct(location)
+
+empty_string
+
+#Remove observations with empty strings
+covid.data.selected <- covid.data.selected %>%
+  filter(continent != "") %>%
+  mutate(continent = droplevels(continent))
+
+nlevels(covid.data.selected$continent)
+levels(covid.data.selected$continent)
+
+#Missing values - turning empty string into NA
+covid.data.selected <- covid.data.selected %>%
+  mutate(across(where(is.character), ~ na_if(., "")))
+
+#Drop rows missing entries in multiple features
+covid.data.selected <- covid.data.selected %>%
+  filter(!if_all(everything(), is.na))
+
+dim(covid.data.selected)
+covid.data.selected
+
+#Convert rows containing -Inf to NA
+covid.data.selected <- covid.data.selected %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.infinite(.) &
+                                              . < 0, NA, .)))
+
+covid.data.selected
+
+```
+------------------------------------------------------------------------
+
+
+## COVID-19 data analysis
+
+We then created continent-year summaries to track the evolution of the pandemic on the continent level:
+
+1. For the cumulative variables like total cases, total deaths, total tests and people fully vaccinated, we computed the sums to show the overall effect within each continent for each year.
+
+2. For rates that are different within each year and are more sensitive to outliers, we used the median to provide a more robust central tendency.
+
+
+### Total COVID-19 cases and deaths over years
+
+We decided to generate two line charts (cases and deaths) showing the change over time for each continent. Log scale on the y-axis allows us to compare the continents with very different magnitudes without the largest regions dominating the view. Using both lines and points help convey both the trend across the years and their specific annual values. 
+
+```{r covid_analysis1}
+
+# Aggregate variables yearly at the continent level
+covid_continent_year <- covid.data.selected %>%
+  group_by(continent, year) %>%
+  summarise(
+    total_cases  = sum(total_cases, na.rm = TRUE),
+    total_deaths = sum(total_deaths, na.rm = TRUE),
+    positive_rate = median(positive_rate, na.rm = TRUE),
+    people_fully_vaccinated = sum(people_fully_vaccinated, na.rm = TRUE),
+    reproduction_rate = median(reproduction_rate, na.rm = TRUE),
+    total_tests = sum(total_tests),
+    new_cases = sum(new_cases),
+    population = sum(population)
+  ) %>%
+  ungroup()
+
+#Visualize the number of cases across the years per continent
+fig1 <- ggplot(covid_continent_year,
+               aes(x = year, y = total_cases, colour = continent)) +
+  geom_line() +
+  geom_point(alpha = 0.7) +
+  scale_y_log10() +
+  labs(title = "Total COVID-19 cases over the years", x = "Year",
+       y = "Total cases (log scale)") +
+  theme_minimal()
+
+#Visualize the number of deaths across the years per continent
+fig2 <- ggplot(covid_continent_year,
+               aes(x = year, y = total_deaths, colour = continent)) +
+  geom_line() +
+  geom_point(alpha = 0.7) +
+  scale_y_log10() +
+  labs(title = "Total COVID-19 deaths over the years", x = "Year",
+       y = "Total deaths (log scale)") +
+  theme_minimal()
+
+#Produce both Visualisations as One
+fig1 + fig2
+
+```
+
+Overall we can see that both the COVID-19 cases and deaths increased rapidly from 2020, reached a peak in 2022 and declined thereafter till 2024. Across continents, Europe, Asia and North America reported the highest number of cases and deaths, each peaking around 10¹¹ total cases and 10⁹ total deaths. Africa reported fewer cases and deaths compared to the other continents. Oceania consistently reported the lowest totals peaking at around 10⁹ cases and 10⁷ deaths. The use of a logarithmic scale highlights the relative differences between continents. While Europe, Asia, and North America were most heavily affected, the trends confirm that all regions experienced a similar pandemic trajectory, with 2022 as the turning point in both cases and deaths.
+
+
+### People fully vaccinated
+
+Since vaccination was a central factor in shaping the course of the pandemic, we wanted to visualize the total number of people fully vaccinated across continents from 2020 to 2024.
+
+To do this, we decided to create a line plot of vaccination totals over time for each continent represented by different colors. We applied a logarithmic scale on the y-axis, which helps bring very large and very small values onto the same scale and allows for easier comparisons between continents with very different population sizes. Additionally, we used faceting by continent so that each region’s vaccination trend could be inspected individually to avoid overlapping. This choice provides a clearer picture of how vaccination uptake evolved in Africa, Europe, Asia, North America and South America, highlighting both differences in scale and differences in timing.
+
+This visualization sets the stage for comparing vaccination progress against other pandemic indicators or socio-economic indicators after merging to world indicator data like GDP, unemployment, and inflation. By doing so, we aim to uncover whether regions with stronger economic indicators were able to vaccinate their populations more rapidly and effectively.
+
+```{r covid_analysis2}
+
+#Visualisation for Total people Vaccinated by Each Continent over the Years
+ggplot(covid_continent_year,
+       aes(x = year, y = people_fully_vaccinated, colour = continent)) +
+  geom_line() +
+  geom_point(alpha = 0.6) +
+  scale_y_log10() +
+  facet_wrap( ~ continent) +
+  labs(title = "Total number of people fully vaccinated over the years",
+       x = "Years",
+       y = "People Fully Vaccinated") +
+  theme_minimal()
+  
+```
+
+The line plots show that vaccination rollouts followed different trajectories across continents between 2020 and 2024. Asia and Europe reached the highest absolute numbers of fully vaccinated people early on, reflecting large-scale campaigns and relatively strong logistical capacity. North and South America also achieved substantial vaccination coverage, though with slightly more fluctuation over time. In contrast, Africa and Oceania show much smaller totals, indicating slower or more limited vaccine access relative to population size.
+Overall, the visualization highlights striking inequalities in global vaccination progress. Regions with stronger healthcare systems and greater economic resources were able to vaccinate large shares of their populations quickly, while other continents lagged behind.
+
+
+### Case Fatality Rate (CFR)
+
+After preparing continent–year aggregates, we calculated the case fatality rate (CFR) for each continent between 2020 and 2024. The CFR is defined as the ratio of total deaths to total confirmed cases, multiplied by 100 to express it as a percentage. Case Fatality Rate is a measure used to identify the risk of dying from a 
+disease
+
+To visualize CFR, we used a heatmap with years along the x-axis and continents on the y-axis. The color of each tile represents the CFR for that continent-year combination. This design makes it easy to compare values both across time on how CFR changed between 2020 and 2024 and across the differences between continents. We chose the viridis colour palette for the fill scale because it is colourblind-friendly and offers a smooth gradient, making small differences in CFR easier to see. 
+
+This heatmap provides a compact overview of the data: for example, we can quickly spot whether CFR was highest in the early phase of the pandemic, whether it declined after the introduction of vaccines, and which continents experienced consistently higher fatality rates compared to others.
+
+```{r covid_analysis3, echo=TRUE, results='hide'}
+
+#Calculating Case Fatality Rate at continent-year level
+#CFR = (total deaths / total cases) * 100
+covid_CFR <- covid_CFR <- covid_continent_year %>%
+  mutate(cfr = 100 * total_deaths / total_cases) %>%
+  select(continent, year, cfr)
+
+#Inspect the data
+covid_CFR
+
+#Visualize CFR over time per continent with heatmap
+ggplot(covid_CFR, aes(x = factor(year), y = continent, fill = cfr)) +
+  geom_tile(color = "white") +
+  #use vridis color palette
+  #format legend labels to 1 decimal place
+  scale_fill_viridis_c(option = "C",
+                       labels = scales::number_format(accuracy = 0.1)) +
+  labs(title = "Case Fatality Rate (2020–2024)",
+       x = "Year",
+       y = "Continent",
+       fill = "CFR (%)") +
+  theme_minimal()
+  
+```
+
+At the beginning of the pandemic in 2020, CFR values were highest in South America, North America, and Europe, while Asia, Africa, and Oceania showed lower rates. Over time, the CFR decreased steadily across all regions, reflecting the impact of vaccination campaigns, improved medical treatments, and broader testing coverage. By 2024, fatality rates had converged to relatively low levels worldwide (displayed through darker colour), with Oceania displaying the most pronounced decline.
+
+------------------------------------------------------------------------
+
+
+## Preparing and cleaning the World Bank data
+
+We first imported the World Bank dataset and inspected it using functions such as head(), str(), summarise(), and colnames() to better understand its structure and variable names. We then selected only the variables relevant to our analysis: country name, year, inflation rate, GDP per capita, unemployment rate, and GDP annual growth. To make the dataset easier to work with, we renamed the columns to shorter and consistent labels (location, year, inflation_rate, GDP, unemployment_rate, gdp_annual_growth).
+
+Next, we converted the data types for our analysis: the location variable was transformed into a factor to be able to perform analysis across countries, while year was explicitly converted into numeric format. Finally, we re-checked the structure of the dataset to ensure proper formatting and consistency. These steps allowed us to create a clean and well-structured dataset.
+
+```{r prep_world_data, echo=TRUE, results='hide'}
+
+#Read world bank data
+world.indicator <- read_csv("data/world_bank_data_2025.csv")
+
+head(world.indicator)
+str(world.indicator)
+summarise(world.indicator)
+colnames(world.indicator)
+
+#Select specific columns of interest
+world.indicator.selected <- world.indicator %>%
+  select(
+    country_name,
+    year,
+    `Inflation (CPI %)`,
+    `GDP per Capita (Current USD)`,
+    `Unemployment Rate (%)`,
+    `GDP Growth (% Annual)`
+  )
+
+#Changing column names
+colnames(world.indicator.selected) <- c(
+  "location",
+  "year",
+  "inflation_rate",
+  "GDP",
+  "unemployment_rate",
+  "gdp_annual_growth"
+)
+
+#Converting data types for analysis
+world.indicator.selected
+world.indicator.selected$location <- as.factor(world.indicator.selected$location)
+world.indicator.selected$year <- as.numeric(world.indicator.selected$year)
+
+str(world.indicator.selected)
+world.indicator.selected
+
+levels(world.indicator.selected$location)
+min(world.indicator.selected$year)
+max(world.indicator.selected$year)
+
+```
+------------------------------------------------------------------------
+
+
+## World Bank data analysis
+
+In line with the approach taken for the COVID-19 dataset, we also examined the second dataset sourced from the World Bank, which contains key socio-economic indicators. Our goal was to understand the broader context in which the pandemic unfolded by linking health outcomes with economic and social conditions. We began by exploring the structure of the dataset and identifying countries with the highest unemployment rates, the highest GDP per capita, and the highest inflation rates. This provided an initial overview of global socio-economic disparities and allowed us to compare different regions more systematically. Focusing on these attributes was important because they can directly or indirectly influence how countries experienced and responded to the pandemic. For instance, high unemployment or inflation can strain healthcare systems and public resources, while higher GDP per capita often correlates with stronger infrastructure and resilience. We had to explore this data on a country level instead of continent level because the continents were not included in this dataset so we could only analyse on continent level after merging
+
+
+### Top 10 countries with the highest GDP
+
+Analyzing the countries with the highest GDP per capita is important in the context of our project because GDP per capita serves as a proxy for a country’s wealth and resources. Higher income levels often correlate with better healthcare infrastructure, stronger social systems, and more fiscal capacity to respond to crisis like the COVID-19 pandemic. This helps us understand why wealthier countries may have had more resilience and different outcomes compared to countries with limited economic resources.
+
+```{r world_bank_analysis2}
+
+#Top 10 countries with the Highest GDP per capita (2020–2024)
+top10_gdp <- world.indicator.selected %>%
+  filter(year >= 2020, year <= 2024) %>%
+  group_by(location) %>%
+  summarise(mean_gdp = mean(GDP, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(mean_gdp)) %>%
+  slice_head(n = 10)
+
+#Visualisation of top 10 countries with the Highest GDP per capita (2020- 2024)
+ggplot(top10_gdp, aes(
+  x = reorder(location, -mean_gdp),
+  y = mean_gdp,
+  fill = location
+)) +
+  geom_col(alpha = 0.8) +
+  scale_fill_brewer(palette = "Paired") +
+  labs(title = "Countries with highest GDP per capita", x = "Country", 
+       y = "GDP per capita") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+```
+
+Monaco leads by a large margin, followed by Liechtenstein and Luxembourg, all with values far above USD 100'000 per person. Other high-income countries and territories such as Bermuda, Ireland, Switzerland also appear in the top ten, with GDP per capita values ranging between roughly USD 80'000 and USD 120'000. These Top 10 countries are mostly small states or financial hubs with specialized economies and strong global integration.
+
+
+### Top 10 countries with the highest inflation rate
+
+Furthermore, we decided to examine the countries with the highest inflation rates is relevant because inflation directly affects the affordability of goods, healthcare, and essential services. Extreme inflation undermines economic stability, erodes public trust, and limits government capacity to respond effectively to crisis like the COVID-19 pandemic. In this way, inflation serves as a critical indicator of socio-economic vulnerability, helping us understand how economic instability may have amplified the pandemic’s effects in different regions.
+
+```{r world_bank_analysis5}
+
+#Top 10 countries with highest inflation rate (2020–2024)
+top10_inflation <- world.indicator.selected %>%
+  filter(year >= 2020, year <= 2024) %>%
+  group_by(location) %>%
+  summarise(mean_inflation = mean(inflation_rate, na.rm = TRUE),
+            .groups = "drop") %>%
+  arrange(desc(mean_inflation)) %>%
+  slice_head(n = 10)
+
+#Visualisation of Top 10 countries with Highest Inflation rate (2020-2024)
+ggplot(top10_inflation,
+       aes(
+         x = reorder(location, -mean_inflation),
+         y = mean_inflation,
+         fill = location
+       )) +
+  geom_col(alpha = 0.8) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(title = "Countries with highest inflation rate", x = "Country", 
+       y = "Inflation rate") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+```
+
+Zimbabwe, Sudan, and Lebanon stand out with extreme levels of inflation, exceeding 150%, reflecting deep economic and political instability. Other countries like Turkey, Suriname, and Iran also experience high inflation, though at considerably lower rates (30-40%), while nations such as Ethiopia, Haiti, and Ghana face persistent but more moderate inflationary pressures.
+
+
+### Top 10 countries with highest unemployment rate
+
+Analyzing the countries with the highest unemployment rates is also relevant for our project because unemployment reflects the economic vulnerability of a population and its capacity to cope with external shocks, such as the COVID-19 pandemic. High unemployment may strain healthcare systems, reduce public trust, and limit governments’ ability to enforce or support effective pandemic measures. This provides important socio-economic context when linking pandemic outcomes with underlying structural conditions.
+
+```{r world_bank_analysis1}
+
+#Top 10 by unemployment (2020–2024)
+top10_unemployment <- world.indicator.selected %>%
+  filter(year >= 2020, year <= 2024) %>%
+  group_by(location) %>%
+  summarise(mean_unemployment = mean(unemployment_rate, na.rm = TRUE),
+            .groups = "drop") %>%
+  arrange(desc(mean_unemployment)) %>%
+  slice_head(n = 10)
+
+#Visualisation top 10 countries with the Highest Unemployment rate
+ggplot(top10_unemployment,
+       aes(
+         x = reorder(location, -mean_unemployment),
+         y = mean_unemployment,
+         fill = location
+       )) +
+  geom_col(alpha = 0.8) +
+  scale_fill_brewer(palette = "Paired") +
+  labs(title = "Countries with highest unemployment rate", x = "Country", 
+       y = "Unemployment rate") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+```
+
+Eswatini and South Africa stand out with unemployment rates exceeding 30%, followed by Djibouti and the West Bank and Gaza with values between 25% and 30%. The other countries in the top ten, such as Botswana, Congo Rep., Gabon, Namibia, St. Vincent and the Grenadines and Somalia, range between 20% and 25%. Most of these countries are located in Africa, which underlines the regional dimension of per continent unemployment challenges.
+
+
+### World Map of average GDP per capita from 2020-2024
+
+We decided to explore the average GDP on a global economic landscape using a map graph. We calculated the average GDP per capita for each country between 2020 and 2024. The data was first cleaned by converting country names into ISO-3 codes and then aggregated at the country level to compute the mean GDP across these years. This ensured that short-term fluctuations did not dominate the analysis, providing us with a smoother picture of economic conditions over time.
+
+Next, the GDP data was merged with country polygons from Natural Earth to create a spatial dataset, which allowed us to visualise the results on a world map. Because GDP per capita values are highly skewed—ranging from very low incomes in some African and Asian countries to very high incomes in parts of Europe, North America, and Oceania. We applied a logarithmic colour scale to make the differences across the globe easier to compare, as without transformation most countries would appear too similar.
+```{r world_bank_analysis3}
+
+#Visualisation of GDP per capita on map
+gdp_clean <- world.indicator.selected %>%
+  filter(year >= 2020, year <= 2024) %>%
+  #Convert country names to ISO-3 codes
+  mutate(iso_a3 = countrycode(location, "country.name", "iso3c")) %>%
+  
+  #Group by country and calculate mean GDP across 2020 to 2024
+  group_by(iso_a3) %>%
+  summarise(mean_gdp = mean(GDP, na.rm = TRUE), .groups = "drop") %>%
+  
+  #Drop invalid rows
+  filter(!is.na(iso_a3), is.finite(mean_gdp))
+
+#Load country polygons from Natural Earth (sf object)
+world <- ne_countries(scale = "medium", returnclass = "sf") %>%
+  mutate(iso_a3 = iso_a3)  # keep name consistent
+
+#Join data with world map
+map_df <- world %>%
+  left_join(gdp_clean, by = "iso_a3")
+
+#Chloropleth map of GDP
+ggplot(map_df, aes(fill = mean_gdp)) +
+  geom_sf(color = NA) +
+  
+  #Color scale: viridis with log10 transformation for skewed GDP
+  scale_fill_viridis_c(
+    trans = "log10",
+    labels = comma,
+    na.value = "grey90",
+    #colour for missing data
+    name = "Mean GDP per capita (USD)"
+  ) +
+  labs(
+    title = "Average GDP per capita by country (2020–2024)",
+    subtitle = "Mean across years; log-scaled fill for readability",
+    x = NULL,
+    y = NULL
+  ) +
+  
+  #Minimal theme
+  theme_minimal() +
+  theme(panel.grid = element_blank())
+
+```
+
+The world map of average GDP per capita (2020–2024) complements the bar chart of the top ten countries with the highest GDP per capita. While the bar chart highlights a handful of very wealthy small states and financial hubs such as Monaco, Liechtenstein, and Luxembourg, the map provides a broader perspective by revealing how these extreme values compare to global patterns. It shows clear clusters of wealth in North America, Western Europe, and parts of East Asia, contrasting sharply with much lower GDP per capita levels across Sub-Saharan Africa.
+
+When viewed alongside the unemployment bar chart above, the map also helps explain why high unemployment rates are concentrated in African countries despite their relatively low GDP per capita. This underscores the disparities between regions with strong economic resources and those struggling with weaker labor markets. However, further analysis may be required to completely conclude on these statements. 
+
+
+### Unemployment rate vs. GDP
+
+To build on the descriptive bar charts and the world map above, we ran a simple linear regression between unemployment rate and GDP per capita. This allowed us to test whether wealthier countries really faced lower unemployment rates or if the relationship displayed is weak. We log-scaled GDP to correct for skew and used the model to move beyond extreme cases, providing a clearer picture of the overall link between economic prosperity and labor market outcomes.
+
+```{r world_bank_analysis4}
+
+#Number of NAs in world.indicator.selected
+colSums(is.na(world.indicator.selected))
+
+
+#Preparation for linear regression model
+linear.regression <- world.indicator.selected %>%
+  select(GDP, unemployment_rate) %>%
+  drop_na()
+
+#Linear Regression
+model <- lm(unemployment_rate ~ GDP, data = linear.regression)
+summary(model)
+
+
+#Visualisation of Linear Regression
+ggplot(linear.regression, aes(x = GDP, y = unemployment_rate)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm",
+              se = TRUE,
+              colour = "red") +
+  scale_x_log10() +   # GDP skewed
+  labs(title = "Linear Regression: Unemployment rate vs GDP", 
+       x = "GDP per capita (USD)", y = "Unemployment rate (%)") +
+  theme_minimal()
+
+cor(linear.regression$GDP, linear.regression$unemployment_rate)
+
+```
+The model shows a *statistically significant* negative relationship **(p < 0.001)**, meaning countries with higher GDP per capita tend to have slightly lower unemployment rates. However, the *effect size* is very small **(R² = 0.02, correlation = –0.14)**, indicating that GDP alone explains little of the variation. This suggests that while wealthier countries often have stronger labor markets, many other factors beyond GDP influence unemployment as well.
+
+------------------------------------------------------------------------
+
+
+## Merging two datasets
+
+To better understand the impact of COVID-19 across countries, we decided to combine the COVID-19 dataset with the additional socio-economic data such as inflation rate, GDP, unemployment rate and annual growth of GDP. By merging and extending it with these economic indicators, we can explore possible relationships between the spread of the virus and the economic strength of a country.
+
+We merged the two datasets using an inner join on both location and year. This approach was chosen because it only keeps rows that exist in both datasets, guaranteeing that each record in the merged dataset contains both epidemiological outcomes and socioeconomic indicators for the same country and year.
+
+To validate the merge, we checked the minimum and maximum years in the resulting dataset. This confirmed that the dataset now spans the correct research window from 2020 to 2024. 
+
+Finally, we assessed the data completeness by calculating the number of missing values in each column. This step is crucial for us to perform statistical analysis or modelling, as it highlights where further cleaning may be needed.
+
+```{r covid_world_bank_merge, echo=TRUE, results='hide'}
+
+#Filter world bank indicator to match research window (2020 - 2024)
+#Grouping by location and year to align with Covid Data during merge
+world.indicator.selected <- world.indicator.selected %>%
+  group_by(location, year) %>%
+  filter(year >= 2020 & year <= 2024)
+
+#Performed inner join containing records with location and year in both datasets
+merged.data <- inner_join(covid.data.selected,
+                          world.indicator.selected,
+                          by = c("location", "year"))
+
+#Inspect merged data
+merged.data
+
+#Verify time coverage following merge
+min(merged.data$year)
+max(merged.data$year)
+
+dim(merged.data)
+
+#Count missing values in each column
+colSums(is.na(merged.data))
+
+```
+
+
+### Correlation heatmap: COVID-19 vs. Socio-economic indicators
+
+After the data merge we decided to explore the relationship between COVID-19 variables and socio-economic indicators, we calculated pairwise correlations and visualized them in a heatmap. The heatmap shows how strongly variables correlate with each other, with blue indicating positive correlations and red indicating negative correlations. We used per-capita cases and deaths (per 100k) and for the number of people vaccinated to reduce confounding by population size, then correlated these with GDP per capita, unemployment, inflation, and GDP growth.
+
+
+```{r correlation_covid_indicators}
+
+#Perform country-year level analysis
+#Construct specific summary statistics for visualisation
+df_corr <- merged.data %>%
+  group_by(location, year) %>%
+  summarise(
+    cases   = max(total_cases, na.rm = TRUE),
+    deaths  = max(total_deaths, na.rm = TRUE),
+    vacc    = max(people_fully_vaccinated, na.rm = TRUE),
+    gdp     = mean(GDP, na.rm = TRUE),
+    unemp   = mean(unemployment_rate, na.rm = TRUE),
+    infl    = mean(inflation_rate, na.rm = TRUE),
+    growth  = mean(gdp_annual_growth, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # log transform highly skewed totals
+    log_cases  = log1p(cases),
+    log_deaths = log1p(deaths),
+    log_vacc   = log1p(vacc)
+  )
+
+#Keep only numerical variables for correlation
+num_vars <- df_corr %>%
+  select(log_cases, log_deaths, log_vacc, gdp, unemp, infl, growth) %>%
+  drop_na()
+
+#Correlation matrix Analysis
+corr_mat <- cor(num_vars, use = "pairwise.complete.obs")
+ord <- hclust(dist(corr_mat))$order
+corr_long <- reshape2::melt(corr_mat[ord, ord], value.name = "r")
+
+#Heatmap with annotated r values and a symmetric diverging scale
+ggplot(corr_long, aes(Var1, Var2, fill = r)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", r)), size = 3) +
+  scale_fill_gradient2(
+    low = "red",
+    mid = "white",
+    high = "blue",
+    midpoint = 0,
+    limits = c(-1, 1),
+    name = "Correlation (r)"
+  ) +
+  coord_fixed() +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(
+    angle = 45,
+    vjust = 1,
+    hjust = 1
+  ),
+  panel.grid = element_blank()) +
+  labs(title = "Correlation: COVID-19 and socio-economic indicators", x = NULL,
+       y = NULL)
+
+```
+
+The results reveal that COVID-19 *cases*, *deaths*, and *vaccination rates* are **strongly positively correlated**, which is expected since higher case numbers often led to more deaths and greater vaccine rollouts. In contrast, socio-economic indicators such as *GDP*, *unemployment*, *inflation*, and *growth* show only **weak correlations** with COVID-19 variables, suggesting that pandemic outcomes were not strongly determined by these factors alone.
+
+
+## Data analysis post data-merging
+
+Following the merge, we noticed that the most recent year (2024) contained no valid entries for GDP and total deaths, which is why the visualisations only covered the period from 2020 to 2023.
+
+```{r grouped_merged_data, include=FALSE}
+
+#Grouping merged data by continent and year for visualisation
+#Summary statistics for variables of interest 
+merged.data.visualisation <- merged.data %>% 
+  group_by(continent, year) %>% 
+  summarise(
+    total_cases = mean(total_cases, na.rm = TRUE),
+    total_deaths = sum(total_deaths, na.rm = TRUE),
+    reproduction_rate = mean(reproduction_rate, na.rm = TRUE),
+    people_fully_vaccinated = sum(people_fully_vaccinated, na.rm = TRUE), 
+    positive_rate = mean(positive_rate, na.rm = TRUE), 
+    human_development_index = mean(human_development_index, na.rm = TRUE), 
+    inflation_rate = mean(inflation_rate, na.rm = TRUE), 
+    GDP = mean(GDP, na.rm = TRUE), 
+    unemployment_rate = mean(unemployment_rate, na.rm = TRUE), 
+    gdp_annual_growth = mean(gdp_annual_growth, na.rm = TRUE)
+  ) %>% 
+  ungroup()
+
+```
+
+
+```{r 2024_values_invalid}
+
+#Check if 2024 values are missing or invalid
+invalid <- merged.data.visualisation %>%
+  filter(year == 2024) %>%
+  summarise(
+    n_rows = n(),
+    n_valid_points = sum(!is.na(GDP) & GDP > 0 & !is.na(total_deaths))
+  )
+
+invalid
+
+```
+
+We then created a series of animated scatter plots to explore the joint dynamics of COVID-19 outcomes and socioeconomic indicators across continents.
+
+**Firstly**, we plotted GDP per capita against total deaths by continent to show how the relationship evolved over the years during the pandemic. GDP per capita was chosen because it serves as a widely used measure of economic development and might reflect differences in healthcare capacity and reporting systems. Total deaths were plotted on the y-axis to capture the pandemic’s mortality burden.
+
+**Secondly**, we visualised the relationship between GDP annual growth and the number of people fully vaccinated. This plot was designed to examine how vaccination efforts progressed alongside changes in economic growth during the pandemic years.
+
+**Finally**, we constructed an animated scatter plot of inflation rate against the COVID-19 reproduction rate. This visualisation was included to explore whether short-run macroeconomic shocks, such as inflation, coincided with changes in transmission dynamics. As with the other plots, we used colour to distinguish continents and added a time slider to observe changes across the 2020–2023 period. Together, these three visualisations provided an interactive and descriptive overview of how key socioeconomic indicators aligned with major pandemic outcomes and dynamics at the continental level.
+
+
+### GPD vs. Total deaths by continent
+
+```{r post_merge_analysis1}
+
+#Grouping merged data by continent and yeaar for visualisation
+#Summary statistics for variables of interest
+merged.data.visualisation <- merged.data %>%
+  group_by(continent, year) %>%
+  summarise(
+    total_cases = mean(total_cases, na.rm = TRUE),
+    total_deaths = sum(total_deaths, na.rm = TRUE),
+    reproduction_rate = mean(reproduction_rate, na.rm = TRUE),
+    people_fully_vaccinated = sum(people_fully_vaccinated, na.rm = TRUE),
+    positive_rate = mean(positive_rate, na.rm = TRUE),
+    human_development_index = mean(human_development_index, na.rm = TRUE),
+    inflation_rate = mean(inflation_rate, na.rm = TRUE),
+    GDP = mean(GDP, na.rm = TRUE),
+    unemployment_rate = mean(unemployment_rate, na.rm = TRUE),
+    gdp_annual_growth = mean(gdp_annual_growth, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+
+#Visualisation of GDP and Total Deaths over the years by continent
+fig3 <- merged.data.visualisation %>%
+  plot_ly(
+    x = ~ GDP,
+    y = ~ total_deaths,
+    color = ~ continent,
+    frame = ~ year,
+    #Frame by year
+    #Scatter plot with markers
+    type = "scatter",
+    mode = "markers",
+    #Marker size and transparency
+    marker = list(size = 12, opacity = 0.7),
+    #Custom hover text for interactivity
+    text = ~ paste(
+      "Continent:",
+      continent,
+      "<br>",
+      "Year:",
+      year,
+      "<br>",
+      "GDP:",
+      round(GDP, 0),
+      "<br>",
+      "Deaths:",
+      round(total_deaths, 0)
+    ),
+    hoverinfo = "text"
+  ) %>%
+  layout(
+    title = "GDP per cap vs Total deaths by continent (2020–2023)",
+    xaxis = list(
+      title = "Average GDP per cap (log)",
+      type = "log",
+      tickformat = "$~s",
+      tickangle = 45
+    ),
+    #Extend space at the bottom for the yearly slider
+    margin = list(b = 120),
+    yaxis = list(title = "Total deaths"),
+    legend = list(
+      orientation = "v",
+      x = 1.05,
+      #Move legend to the right OUTSIDE plot
+      xanchor = "left",
+      y = 0.5,
+      yanchor = "middle"
+    ),
+    margin = list(r = 150) #Extra space on the right for legend
+  )
+
+#Display scatter plot
+fig3
+
+```
+
+From 2020 to 2023, the relationship between GDP per capita and COVID-19 deaths shows clear differences across continents. Higher-income regions such as Europe and North America experienced the highest total death counts despite their strong economies, while Africa and Oceania reported comparatively fewer deaths at much lower or moderate GDP levels. In our opinion, this pattern can partly be explained by larger and older populations, higher testing and reporting accuracy, and greater transparency in data collection in Europe and North America.
+
+
+### GDP growth vs. Vaccinations by continent
+
+```{r post_merge_analysis2}
+
+#Visualisation of GDP Annual Growth and People Vaccinated by coninent over time
+fig4 <- merged.data.visualisation %>%
+  plot_ly(
+    x = ~ gdp_annual_growth,
+    y = ~ people_fully_vaccinated,
+    color = ~ continent,
+    frame = ~ year,
+    #Year slider to move through 2020 - 2023
+    #Scatter plot with markers
+    type = "scatter",
+    mode = "markers",
+    marker = list(size = 12, opacity = 0.7),
+    #Custom hover text to display key information interactively
+    text = ~ paste(
+      "Continent:",
+      continent,
+      "<br>",
+      "Year:",
+      year,
+      "<br>",
+      "GDP growth:",
+      round(gdp_annual_growth, 2),
+      "%<br>",
+      "Vaccinated:",
+      scales::comma(round(people_fully_vaccinated, 0))
+    ),
+    hoverinfo = "text"
+  ) %>%
+  layout(
+    title = "GDP Growth vs Vaccinations by continent (2020–2023)",
+    xaxis = list(title = "GDP annual growth (%)"),
+    yaxis = list(title = "People fully vaccinated"),
+    #Place legend outside plot area for readability
+    legend = list(
+      x = 1.05,
+      xanchor = "left",
+      y = 0.5,
+      yanchor = "middle"
+    ),
+    margin = list(r = 150)
+  )
+
+#Display scatter plot
+fig4
+
+```
+
+
+In 2020, most continents experienced negative GDP growth due to the beginning of the pandemic, while vaccination rates were still close to zero. By 2021, GDP began to rise and vaccination campaigns were underway, especially in Asia, Europe, and North America. In 2022, vaccination numbers peaked globally, with Asia showing the largest totals. By 2023, GDP growth stabilized across continents, but vaccination momentum slowed a bit, reflecting probably both the initial success of mass marketing campaigns and reduced urgency as the pandemic came under better control.
+
+
+### Inflation rate vs. Reproduction rate by continent
+
+```{r post_merge_analysis3}
+
+#Visualisation of Inflation Rate vs Reproduction rate by continent over time
+fig5 <- merged.data.visualisation %>%
+  plot_ly(
+    x = ~ inflation_rate,
+    y = ~ reproduction_rate,
+    color = ~ continent,
+    frame = ~ year,
+    #Year slider to move through 2020-2023
+    #Scatter plots with markers
+    type = "scatter",
+    mode = "markers",
+    marker = list(size = 12, opacity = 0.7),
+    #Custom hover text to display key information interactively
+    text = ~ paste(
+      "Continent:",
+      continent,
+      "<br>",
+      "Year:",
+      year,
+      "<br>",
+      "Inflation rate:",
+      round(inflation_rate, 2),
+      "%<br>",
+      "Reproduction rate:",
+      round(reproduction_rate, 2)
+    ),
+    hoverinfo = "text"
+  ) %>%
+  layout(
+    title = "Inflation rate vs Reproduction rate by continent (2020–2023)",
+    xaxis = list(title = "Inflation rate"),
+    yaxis = list(title = "Reproduction rate"),
+    #Place legend outside the plot area for readability
+    legend = list(
+      x = 1.05,
+      xanchor = "left",
+      y = 0.5,
+      yanchor = "middle"
+    ),
+    margin = list(r = 150)
+  )
+
+#Display scatter plot
+fig5
+
+```
+
+In 2020 and 2021, most continents had relatively stable reproduction rates around or slightly above 1, while inflation varied widely, with Africa showing especially high levels. By 2022, reproduction rates began to fall below 1 overall, while inflation rose across continents. In 2023, reproduction rates dropped further, but inflation decreased slightly, still showing the economic pressure during the pandemic years.
+
+
+### Average unemployment rate by continent and year
+
+Although the graph below only uses socio-economic data, we chose to keep it in the merged data section because it adds important context. Unemployment captures the broader economic impact of the pandemic and complements our other visualizations above by showing how labor markets evolved alongside health and vaccination outcomes. We decided to use a bar chart to show the average unemployment rate by continent between 2020 and 2024. 
+```{r post_merge_analysis4}
+
+#Visualisation of Average unemployment rate over the years by continent
+ggplot(merged.data,
+       aes(x = factor(year), y = unemployment_rate, fill = continent)) +
+  stat_summary(
+    fun = median, #Median per group
+    geom = "col",
+    position = position_dodge(width = 0.7),
+    width = 0.5,
+    na.rm = TRUE
+  ) +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(title = "Average unemployment rate by continent and year",
+       x = "Year",
+       y = "Average unemployment rate",
+       fill = "Continent") +
+  theme_minimal(base_size = 13)
+
+```
+
+South America consistently records the highest unemployment rates, peaking above 10% in 2020 and remaining clearly above other continents throughout the period. Africa, Asia, and Europe show moderate unemployment levels around 5–6%, while North America and Oceania remain slightly lower on average. 
+
+Overall, unemployment rates declined somewhat from 2020 to 2023 before rising again slightly in 2024. The chart highlights persistent regional differences, with South America facing the greatest labor market challenges. South Americas unemployment peak in 2020 reflects the immediate shock of the pandemic, while the decline in subsequent years shows the effect of the recovery. Comparatively, Africa, Oceania, Europe, Asia and North America experienced more stable and comparatively lower unemployment. Importantly, these labor market trends mirror the timing of COVID-19 waves and vaccination rollouts, showing how the pandemic not only affected health outcomes but also had lasting economic consequences across regions.
+
+------------------------------------------------------------------------
+
+
+## Fitting model 
+
+After producing descriptive visualisations, we wanted to move beyond simple plots and test whether there was a measurable relationship between a country’s economic status and its reported COVID-19 burden. Specifically, we asked: 
+
+>*Do countries with higher GDP per capita tend to report more total COVID-19 cases?*
+
+To address this, we fitted a simple linear regression model using our merged dataset, with total cases as the dependent variable and GDP per capita as the explanatory variable. Before fitting the model, we removed rows with missing values in either variable to ensure the results were based only on valid observations. Because both GDP and case counts vary by several orders of magnitude across countries, we applied transformations (scaling) to make the relationship easier to model and interpret. We then examined the regression summary and diagnostic plots to assess the strength and form of the relationship.
+
+```{r fitting_model2, echo=FALSE}
+
+#Removing rows with missing values in the selected features
+merged.data.lm <- merged.data %>%
+  select(total_cases, GDP) %>%
+  drop_na()
+
+#Regression: Total cases explained by GDP
+lm_model <- lm(scale(total_cases) ~ scale(GDP), data = merged.data.lm)
+
+summary(lm_model)
+
+#Diagnostic plots
+par(mfrow = c(2, 2))
+plot(lm_model)
+
+```
+
+The linear regression model examined the relationship between GDP per capita and total COVID-19 cases across countries. The results showed a *statistically significant positive association*, with higher-GDP countries tending to report more cases. Specifically, for every one standard deviation increase in GDP, reported cases increased by about **0.11** standard deviations on average. However, the explanatory power of the model was very low, with an R-squared value of only **1.3%**, indicating that GDP alone explains very little of the variation in case numbers.
+
+The diagnostic plots further revealed violations of model assumptions: residuals were not normally distributed, heteroscedasticity was present (increasing variance with fitted values), and a small number of influential outliers appeared to dominate the fit. These issues likely arise because absolute totals for both GDP and cases are strongly influenced by population size and because the data are highly skewed. Taken together, the results suggest that while GDP is positively associated with reported cases, it is a weak predictor on its own.
+
+------------------------------------------------------------------------
+
+
+## Chapter of choice
+
+In this chapter, we used the **Plotly package** with the scales and country code libraries, building on our previous visualisation to produce an animated interactive chloropleth map of GDP per capita between 2020 to 2023. Plotly is a powerful library for creating interactive and animated visualizations that can be embedded directly into RMarkdown or HTML outputs. Our focus was on visualizing GDP per capita by country between 2020 and 2023 using an animated world map. Countries were represented by their ISO3 codes to align with the geographic map data. To enhance comparability across nations with vastly different economic sizes, GDP values were log-transformed, which improved visual contrast on the color scale.
+
+The animation allows users to observe how GDP per capita evolved over time, while the interactive slider makes it possible to explore individual years in detail. By hovering over a country, one can view its name, year, and GDP per capita value. In addition, zooming in and out of the map is possible. The resulting map highlights both the persistent disparities in GDP levels between low, middle, and high-income countries and the relative pace of economic change across regions.
+
+```{r chapter_of_choice}
+
+gdp_map_data <- world.indicator.selected %>%
+  #Keep only years of interest (2020 - 2024)
+  filter(year %in% 2020:2024) %>%
+  
+  #Convert country names to IS03 codes
+  mutate(iso3 = countrycode(location, "country.name", "iso3c")) %>%
+  group_by(iso3, location, year) %>%
+  
+  #Summarise GDP per country-year level using median
+  summarise(median_gdp = median(GDP, na.rm = TRUE), .groups = "drop") %>%
+  
+  #Remove invalid rows: missing ISO3, infinite values or non positive GDP
+  filter(!is.na(iso3), is.finite(median_gdp), median_gdp > 0) %>%
+  
+  #Apply Log10 transform for better contrast and comparability
+  mutate(log_gdp = log10(median_gdp))
+
+
+#Defining color bar ticks
+ticks_real <- c(2000, 5000, 10000, 20000, 50000, 100000)
+
+
+#Visualising choropleth Animated Map with slider for each year
+fig6 <- plot_ly(
+  data = gdp_map_data,
+  type = "choropleth",
+  
+  #Map countries using ISO3
+  locations = ~ iso3,
+  locationmode = "ISO-3",
+  
+  #Colourshading based on log-transformed GDP
+  z = ~ log_gdp,
+  
+  #Show slider across years
+  frame = ~ year,
+  
+  #Choose a sequential blue-green colour scale
+  colorscale = "YlGnBu",
+  
+  #Customise color bar
+  colorbar = list(
+    title = "GDP per capita (USD)",
+    tickvals = log10(ticks_real),
+    ticktext = comma(ticks_real)
+  ),
+  #Show tooltip text on hover
+  text = ~ paste0(
+    "Country: ",
+    location,
+    "<br>Year: ",
+    year,
+    "<br>GDP per capita: $",
+    comma(median_gdp)
+  ),
+  hoverinfo = "text"  #Show tool tip with above text
+) %>%
+  layout(
+    title = "GDP per capita by country (2020–2025)",
+    geo = list(
+      showframe = FALSE,
+      showcoastlines = TRUE,
+      projection = list(type = "equirectangular")
+    )
+  ) %>%
+  
+  #Animation speed and transition style
+  animation_opts(1000, easing = "linear") %>%
+  
+  #Add slider to interactively pick a year
+  animation_slider(currentvalue = list(prefix = "Year: "))
+
+#Display the animated map
+fig6
+
+```
+
+From 2020 to 2023, the map illustrates the uneven recovery from the pandemic. Wealthier countries, for example the United States or countries in Western Europe largely sustained or regained high GDP per capita levels, while many developing economies such as countries in Africa, in the Middle East or in South America saw only modest improvements, leaving global disparities very visible. At the same time, the persistence of low-income regions underlines the long-term challenges of achieving a more balanced global development.
+
+------------------------------------------------------------------------
+
+
+## Summary
+
+In summary, our analysis combined COVID-19 health data with socio-economic indicators from the World Bank to explore how different regions experienced the pandemic. We found clear patterns in case fatality rates and unemployment, with South America standing out for particularly high labor market disruption. Wealthier countries showed stronger economic resilience, but correlations between socio-economic indicators and pandemic outcomes were generally weak, highlighting the complexity of the crisis. The findings indicate that global crisis are multi-dimensional, where health, economy and social systems interact in complex ways, making it difficult to make one-to-one interpretations. Overall, the results underline that while economic context matters, health outcomes during COVID-19 were shaped by a wide range of unknown factors, which cannot be fully determined in this report.
+
+## Take Home
+
+Through this project, we learnt how to prepare large, complex datasets for analysis, including handling missing values, converting data types, aggregating data at different levels, producing various visualisations (both static and interactive), modelling data and performing log transformations to deal with skewed distributions. We also gained hands on experience in integrating datasets from different domains (health and economics). Although it was a complex and large dataset to work with, this project also reinforced the value of interdisciplinary approaches, showing that socio-economic and health outcomes cannot be fully explained by single variables.
+
+## Limitations
+
+The project also revealed several challenges such as the complexity of the data with different time resolutions, varying levels of completeness across regions and substantial skewness in variables like cases, deaths and GDP. We encountered so many missing and invalid entries, for example, the absence of valid data for the year 2024 during visualisation, which limited the scope of some analysis. Moreover, absolute totals were often dominated by population size, requiring careful interpretation. Other limitations include inconsistencies in how countries reported their COVID-19 cases and deaths, underreporting in low-resource countries. While log-transformation improved comparability and readability, it may have also masked absolute differences. Finally, the associations identified cannot be identified as strong or causal, since multiple confounding factors may have had an impact on the results. 
+
+------------------------------------------------------------------------
+
+
+## Comment on the use of Generative AI
+
+We used AI, mainly ChatGPT, to support idea finding in the beginning, data preparation, straighten out R coding, polish the written report and help with certain wording and expressing thoughts. In addition, the use of generative AI helped us in some sense on how to find solutions when problems arose. This allowed us to save time on repetitive technical tasks and focus more on critical interpretation and drawing meaningful insights. At the same time, we remained cautious to validate all outputs, ensuring that the analysis and conclusions reflect our own understanding and ideas.
+
+
+
+
