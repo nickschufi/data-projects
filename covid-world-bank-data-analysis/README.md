@@ -32,3 +32,9 @@ Build an analysis in **R Markdown** combining statistical and visual methods, wi
 ## My Role
 
 Contributed across **all stages** of the project, inclduing data cleaning, statistical analysis, visualization, and reporting, as an equal partner in a two-person team.
+
+## How to view the rendered HTML report
+
+To view the rendered report, click the respective HTML report in this folder and download the raw file and open it in your browser (GitHub cannot preview HTML files this large directly unfortunately).
+
+Alternatively open the Rmarkdown file in RStudio and knit to HTML.
