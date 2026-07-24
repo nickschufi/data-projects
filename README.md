@@ -6,4 +6,4 @@ For a quick visual overview, check out my [portfolio site](https://nickschufi.gi
 
 ## About Me
 
-I'm currently finish studying Applied Data Science and Articial Intelligence on a Master's level and looking to start my career in data.
+I'm currently finish studying Applied Data Science and Artificial Intelligence on a Master's level and looking to start my career in data.
